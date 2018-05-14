@@ -1,0 +1,5 @@
+*.user
+Makefile
+build/
+*.obj
+.qmake.stash
