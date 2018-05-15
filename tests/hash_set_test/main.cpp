@@ -92,7 +92,7 @@ int main(int /*argc*/, char** /*argv*/)
 {
     using namespace tools;
 
-    lock_free::hp::static_open_hash_set<
+    lock_free::hp::static_closed_hash_set<
         8, 1024 * 1024, size_t
     > structure;
 
