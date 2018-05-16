@@ -11,6 +11,7 @@
 #include <stdexcept>
 #include <functional>
 #include <type_traits>
+#include <stdexcept>
 
 #include <boost/noncopyable.hpp>
 
@@ -144,11 +145,14 @@ namespace hp
             m_head.store(m_hpm.get_node(0), std::memory_order_relaxed);
         }
 
-        bool contains(uint64_t thread_index, const value_type& val)
-        {
+        bool contains(
+            uint64_t thread_index,
+            const value_type& val,
+            node_type* start_node = nullptr
+        ) {
             bool ret{};
 
-            auto res = search(val);
+            auto res = search(thread_index, val, true, start_node);
             if(res.curr && res.curr->value == val) ret = true;
             m_hpm.set_hp(thread_index, 0, nullptr);
             m_hpm.set_hp(thread_index, 1, nullptr);
@@ -157,8 +161,12 @@ namespace hp
             return ret;
         }
 
-        bool add(uint64_t thread_index, const value_type& val, bool is_sentinel)
-        {
+        node_type* add(
+            uint64_t thread_index,
+            const value_type& val,
+            bool is_sentinel,
+            node_type* start_node = nullptr
+        ) {
             auto new_node = m_hpm.get_node(thread_index, val);
             new_node->is_sentinel = is_sentinel;
             auto clear = make_scope_exit(
@@ -171,24 +179,27 @@ namespace hp
 
             while(true)
             {
-                auto res = search(thread_index, val, false);
+                auto res = search(thread_index, val, true, start_node);
                 if( res.curr && m_cmp.equal(res.curr->value, val) )
                 {
                     m_hpm.physically_remove_node(new_node);
-                    return false;
+                    return nullptr;
                 }
 
                 new_node->next.store(res.curr, std::memory_order_relaxed);
                 if(res.prev->next.compare_exchange_strong(
                     res.curr, new_node, std::memory_order_acq_rel
-                )) return true;
+                )) return new_node;
                 m_backoff.wait();
             }
             //
         }
 
-        bool remove(uint64_t thread_index, const value_type& val)
-        {
+        bool remove(
+            uint64_t thread_index,
+            const value_type& val,
+            node_type* start_node = nullptr
+        ) {
             auto clear = make_scope_exit(
                 [this, thread_index] () {
                     m_hpm.set_hp(thread_index, 0, nullptr);
@@ -199,7 +210,7 @@ namespace hp
 
             while(true)
             {
-                auto res = search(thread_index, val, true);
+                auto res = search(thread_index, val, true, start_node);
 
                 if(!res.curr || !m_cmp.equal(res.curr->value, val))
                 {
@@ -244,12 +255,14 @@ namespace hp
         find_result search(
             uint64_t thread_index,
             const value_type& val,
-            bool skip_sentinel
+            bool skip_sentinel,
+            node_type* start_node = nullptr
         ) {
             node_type* prev{}, *curr{}, *next{};
 
             AGAIN:
-            prev = m_head.load(std::memory_order_consume);
+            prev =
+                start_node ? start_node : m_head.load(std::memory_order_consume);
             m_hpm.set_hp(thread_index, 0, prev);
             curr = prev->next.load(std::memory_order_consume);
             assert( !is_marked(curr) );
@@ -381,9 +394,8 @@ namespace hp
 
     public:
         static_closed_hash_set(float load_factor = 2):
-            m_curr_size(2),
+            m_curr_bucket_size(2),
             m_load_factor(load_factor),
-            m_max_elements(static_cast<uint64_t>(m_load_factor * SIZE)),
             m_thread_index_calculator(0),
             m_ptrs( std::make_unique<data_type>() )
         {}
@@ -411,23 +423,65 @@ namespace hp
                 init_nodes_number,
                 max_nodes_number
             );
+            (*m_ptrs)[0] = m_data.add(uint64_t(), 0, true);
+            (*m_ptrs)[1] = m_data.add(uint64_t(), 1, true);
         }
 
         bool add(const value_type& value)
         {
             uint64_t thread_index = get_thread_index();
+
+            auto curr_bucket_size =
+                m_curr_bucket_size.load(std::memory_order_consume);
+            auto bucket = m_hash(value) % curr_bucket_size;
+            if(auto bucket_ptr = (*m_ptrs)[bucket].load(std::memory_order_acquire))
+            {
+                if(m_data.contains(thread_index, value, bucket_ptr)) return false;
+                auto curr_max_size =
+                    static_cast<uint64_t>(m_load_factor * curr_bucket_size);
+                if(m_load_factor_controller.get_sum() + 1 > curr_max_size)
+                {
+                    //expand
+                    if(curr_bucket_size >= SIZE)
+                        throw std::runtime_error("insufficient resources");
+                    m_curr_bucket_size.compare_exchange_strong(
+                        curr_bucket_size,
+                        curr_bucket_size * 2,
+                        std::memory_order_acq_rel
+                    );
+                    //return ;
+                }
+                return m_data.add(thread_index, value, false, xxxx);
+            }
+
             return false;
         }
 
         bool remove(const value_type& value)
         {
             uint64_t thread_index = get_thread_index();
+
+            auto curr_size = m_curr_size.load(std::memory_order_consume);
+            auto bucket = m_hash(value) % curr_size;
+            if(auto bucket_ptr = (*m_ptrs)[bucket].load(std::memory_order_consume))
+            {
+                return m_data.remove(thread_index, value, bucket_ptr);
+            }
+
             return false;
         }
 
         bool contains(const value_type& value)
         {
             uint64_t thread_index = get_thread_index();
+
+            auto curr_size = m_curr_size.load(std::memory_order_consume);
+            auto bucket = m_hash(value) % curr_size;
+            if(auto bucket_ptr = (*m_ptrs)[bucket].load(std::memory_order_consume))
+            {
+                return m_data.contains(thread_index, value, bucket_ptr);
+            }
+
             return false;
         }
 
@@ -442,13 +496,13 @@ namespace hp
         }
 
     private:
-        std::atomic<uint64_t> m_curr_size;
+        std::atomic<uint64_t> m_curr_bucket_size;
         float m_load_factor = 0;
-        uint64_t m_max_elements = 0;
         load_factor_controller_type m_load_factor_controller;
         std::atomic<uint64_t> m_thread_index_calculator;
         std::unique_ptr<data_type> m_ptrs;
         hash_flist_type m_data;
+        hash_type m_hash;
     };
     //
 }
