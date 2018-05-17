@@ -7,13 +7,13 @@ CONFIG -= qt
 
 #QMAKE_CFLAGS += -static
 #QMAKE_CXXFLAGS += -static-libstdc++
-QMAKE_CXXFLAGS += -std=c++14 -Wall -Wextra -pedantic -O3 -pthread
+QMAKE_CXXFLAGS += -std=c++14 -Wall -Wextra -pedantic -g -pthread
 QMAKE_LFLAGS += -lpthread
 INCLUDEPATH += ./../../
 DESTDIR = build
 OBJECTS_DIR = build
 
-DEFINES += NDEBUG
+#DEFINES += NDEBUG
 
 HEADERS += ./../../technical.hpp \
     ./../../hp/hash_set.hpp \

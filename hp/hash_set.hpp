@@ -24,30 +24,6 @@ namespace lock_free
 namespace hp
 {
     //
-    struct key_traits
-    {
-        uint32_t reverse_bit_order( uint32_t x )
-        {
-            // swap odd and even bits
-            x = ((x >> 1) & 0x55555555) | ((x & 0x55555555) << 1);
-            // swap consecutive pairs
-            x = ((x >> 2) & 0x33333333) | ((x & 0x33333333) << 2);
-            // swap nibbles ...
-            x = ((x >> 4) & 0x0F0F0F0F) | ((x & 0x0F0F0F0F) << 4);
-            // swap bytes
-            x = ((x >> 8) & 0x00FF00FF) | ((x & 0x00FF00FF) << 8);
-            // swap 2-byte long pairs
-            return ( x >> 16 ) | ( x << 16 );
-        }
-        uint64_t reverse_bit_order( uint64_t x )
-        {
-            uint64_t low = reverse_bit_order(static_cast<uint32_t>(x));
-            uint64_t high =
-                reverse_bit_order( *(reinterpret_cast<uint32_t*>(&x) + 1) );
-            return (low << 32) | high;
-        }
-    };
-
     template <typename T, typename Hash>
     struct basic_compare
     {
@@ -56,14 +32,11 @@ namespace hp
 
         bool more_equal(const value_type& v1, const value_type& v2) const
         {
-            return key_traits::reverse_bit_order( m_hash(v1) ) >=
-                   key_traits::reverse_bit_order( m_hash(v2) );
+            return m_hash(v1) >= m_hash(v2);
         }
-
         bool equal(const value_type& v1, const value_type& v2) const
         {
-            return key_traits::reverse_bit_order( m_hash(v1) ) ==
-                   key_traits::reverse_bit_order( m_hash(v2) );
+            return m_hash(v1) == m_hash(v2);
         }
 
         hash_type m_hash;
@@ -145,15 +118,34 @@ namespace hp
             m_head.store(m_hpm.get_node(0), std::memory_order_relaxed);
         }
 
+//        node_type* get_head()
+//        {
+//            return m_head.load(std::memory_order_acquire);
+//        }
+
+        node_type* add_sentinel(
+            const value_type& val, node_type* start_node = nullptr
+        ) {
+            if(!start_node) start_node = m_head.load(std::memory_order_relaxed);
+            while(auto ptr = start_node->next.load(std::memory_order_relaxed))
+            {
+                start_node = ptr;
+            }
+            node_type* new_node = m_hpm.get_node(uint64_t(), val);
+            new_node->is_sentinel = true;
+            start_node->next.store(new_node, std::memory_order_relaxed);
+            return new_node;
+        }
+
         bool contains(
             uint64_t thread_index,
             const value_type& val,
-            node_type* start_node = nullptr
+            node_type* start_node
         ) {
             bool ret{};
 
-            auto res = search(thread_index, val, true, start_node);
-            if(res.curr && res.curr->value == val) ret = true;
+            auto res = search(thread_index, val, start_node);
+            if(res.curr && m_cmp.equal(res.curr->value, val)) ret = true;
             m_hpm.set_hp(thread_index, 0, nullptr);
             m_hpm.set_hp(thread_index, 1, nullptr);
             //m_hpm.set_hp(thread_index, 2, nullptr);
@@ -165,7 +157,7 @@ namespace hp
             uint64_t thread_index,
             const value_type& val,
             bool is_sentinel,
-            node_type* start_node = nullptr
+            node_type* start_node
         ) {
             auto new_node = m_hpm.get_node(thread_index, val);
             new_node->is_sentinel = is_sentinel;
@@ -179,7 +171,7 @@ namespace hp
 
             while(true)
             {
-                auto res = search(thread_index, val, true, start_node);
+                auto res = search(thread_index, val, start_node);
                 if( res.curr && m_cmp.equal(res.curr->value, val) )
                 {
                     m_hpm.physically_remove_node(new_node);
@@ -198,7 +190,7 @@ namespace hp
         bool remove(
             uint64_t thread_index,
             const value_type& val,
-            node_type* start_node = nullptr
+            node_type* start_node
         ) {
             auto clear = make_scope_exit(
                 [this, thread_index] () {
@@ -210,7 +202,7 @@ namespace hp
 
             while(true)
             {
-                auto res = search(thread_index, val, true, start_node);
+                auto res = search(thread_index, val, start_node);
 
                 if(!res.curr || !m_cmp.equal(res.curr->value, val))
                 {
@@ -255,14 +247,13 @@ namespace hp
         find_result search(
             uint64_t thread_index,
             const value_type& val,
-            bool skip_sentinel,
-            node_type* start_node = nullptr
+            node_type* start_node
         ) {
             node_type* prev{}, *curr{}, *next{};
 
             AGAIN:
-            prev =
-                start_node ? start_node : m_head.load(std::memory_order_consume);
+            prev = start_node;
+            assert( prev->is_sentinel );
             m_hpm.set_hp(thread_index, 0, prev);
             curr = prev->next.load(std::memory_order_consume);
             assert( !is_marked(curr) );
@@ -270,7 +261,7 @@ namespace hp
             if(curr != prev->next.load(std::memory_order_acquire)) goto AGAIN;
             while(true)
             {
-                if(!curr) return find_result{prev, nullptr};
+                if(!curr || curr->is_sentinel) return find_result{prev, nullptr};
                 next = curr->next.load(std::memory_order_consume);
                 while(is_marked(next))
                 {
@@ -291,10 +282,9 @@ namespace hp
                         goto AGAIN;
                     next = curr->next.load(std::memory_order_relaxed);
                 }
-                // пропускаем постоянные узлы
-                if(m_cmp.more_equal(curr->value, val) &&
-                   !(skip_sentinel && curr->is_sentinel)
-                ) {
+                if(curr->is_sentinel) return find_result{prev, nullptr};
+                if(m_cmp.more_equal(curr->value, val))
+                {
                     return find_result{prev, curr};
                 }
 
@@ -389,12 +379,11 @@ namespace hp
             "value_type must be trivially copyable type"
         );
 
-        using data_type = std::array<std::atomic<node_type*>, SIZE>;
+        using data_type = std::array<node_type*, SIZE>;
         using backoff_strategy_type = BackOff;
 
     public:
         static_closed_hash_set(float load_factor = 2):
-            m_curr_bucket_size(2),
             m_load_factor(load_factor),
             m_thread_index_calculator(0),
             m_ptrs( std::make_unique<data_type>() )
@@ -423,80 +412,47 @@ namespace hp
                 init_nodes_number,
                 max_nodes_number
             );
-            (*m_ptrs)[0] = m_data.add(uint64_t(), 0, true);
-            (*m_ptrs)[1] = m_data.add(uint64_t(), 1, true);
+            auto& ptrs = *m_ptrs;
+            node_type* start_node = nullptr;
+            for(uint64_t i = 0; i < SIZE; ++i)
+            {
+                start_node = m_data.add_sentinel(i, start_node);
+                ptrs[i] = start_node;
+            }
         }
 
         bool add(const value_type& value)
         {
-            uint64_t thread_index = get_thread_index();
-
-            auto curr_bucket_size =
-                m_curr_bucket_size.load(std::memory_order_consume);
-            auto bucket = m_hash(value) % curr_bucket_size;
-            if(auto bucket_ptr = (*m_ptrs)[bucket].load(std::memory_order_acquire))
-            {
-                if(m_data.contains(thread_index, value, bucket_ptr)) return false;
-                auto curr_max_size =
-                    static_cast<uint64_t>(m_load_factor * curr_bucket_size);
-                if(m_load_factor_controller.get_sum() + 1 > curr_max_size)
-                {
-                    //expand
-                    if(curr_bucket_size >= SIZE)
-                        throw std::runtime_error("insufficient resources");
-                    m_curr_bucket_size.compare_exchange_strong(
-                        curr_bucket_size,
-                        curr_bucket_size * 2,
-                        std::memory_order_acq_rel
-                    );
-                    //return ;
-                }
-                return m_data.add(thread_index, value, false, xxxx);
+            if(
+                m_load_factor_controller.get_sum() + 1 >
+                static_cast<uint64_t>(m_load_factor) * SIZE
+            ) {
+                throw std::runtime_error("insufficient resources");
             }
-
-            return false;
+            uint64_t thread_index = get_thread_index();
+            auto bucket = m_hash(value) % SIZE;
+            auto ret = m_data.add(thread_index, value, false, (*m_ptrs)[bucket]);
+            m_load_factor_controller.increment(thread_index);
+            return ret;
         }
 
         bool remove(const value_type& value)
         {
             uint64_t thread_index = get_thread_index();
-
-            auto curr_size = m_curr_size.load(std::memory_order_consume);
-            auto bucket = m_hash(value) % curr_size;
-            if(auto bucket_ptr = (*m_ptrs)[bucket].load(std::memory_order_consume))
-            {
-                return m_data.remove(thread_index, value, bucket_ptr);
-            }
-
-            return false;
+            auto bucket = m_hash(value) % SIZE;
+            auto ret = m_data.remove(thread_index, value, (*m_ptrs)[bucket]);
+            m_load_factor_controller.decrement(thread_index);
+            return ret;
         }
 
         bool contains(const value_type& value)
         {
             uint64_t thread_index = get_thread_index();
-
-            auto curr_size = m_curr_size.load(std::memory_order_consume);
-            auto bucket = m_hash(value) % curr_size;
-            if(auto bucket_ptr = (*m_ptrs)[bucket].load(std::memory_order_consume))
-            {
-                return m_data.contains(thread_index, value, bucket_ptr);
-            }
-
-            return false;
+            auto bucket = m_hash(value) % SIZE;
+            return m_data.contains(thread_index, value, (*m_ptrs)[bucket]);
         }
 
     private:
-        uint64_t get_parent_bucket(uint64_t bucket)
-        {
-            uint64_t parent = m_curr_size.load(std::memory_order_consume);
-            do {
-                parent = parent >> 1;
-            } while(parent > bucket);
-            return bucket - purent;
-        }
-
-    private:
-        std::atomic<uint64_t> m_curr_bucket_size;
         float m_load_factor = 0;
         load_factor_controller_type m_load_factor_controller;
         std::atomic<uint64_t> m_thread_index_calculator;

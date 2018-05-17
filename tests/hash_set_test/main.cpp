@@ -94,9 +94,9 @@ int main(int /*argc*/, char** /*argv*/)
 
     lock_free::hp::static_closed_hash_set<
         8, 1024 * 1024, size_t
-    > structure;
+    > structure(2);
 
-    constexpr size_t WAIT_NUM = 10;
+    constexpr size_t WAIT_NUM = 1;
     constexpr size_t prod_thread_num = 4;
     constexpr size_t cons_thread_num = 4;
     constexpr size_t thread_num = prod_thread_num + prod_thread_num;
@@ -111,7 +111,7 @@ int main(int /*argc*/, char** /*argv*/)
         (size_t i) mutable -> void
         {
             need_init<decltype(structure)>::thread_init(structure);
-            random_uniformly_gen<size_t> rgen(1, 1024 * 512);
+            random_uniformly_gen<size_t> rgen(1, 2 * 1024 * 1024);
 
             ++started_num;
             while(!start);
@@ -141,7 +141,7 @@ int main(int /*argc*/, char** /*argv*/)
         [&structure, &cons_arr, &start, &stop, &started_num]
         (size_t i) mutable -> void
         {
-            random_uniformly_gen<size_t> rgen(1, 1024 * 512);
+            random_uniformly_gen<size_t> rgen(1, 2 * 1024 * 1024);
             need_init<decltype(structure)>::thread_init(structure);
 
             ++started_num;
