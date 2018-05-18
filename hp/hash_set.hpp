@@ -145,7 +145,13 @@ namespace hp
             bool ret{};
 
             auto res = search(thread_index, val, start_node);
-            if(res.curr && m_cmp.equal(res.curr->value, val)) ret = true;
+            if(
+                res.curr &&
+                !res.curr->is_sentinel &&
+                m_cmp.equal(res.curr->value, val)
+            ) {
+                ret = true;
+            }
             m_hpm.set_hp(thread_index, 0, nullptr);
             m_hpm.set_hp(thread_index, 1, nullptr);
             //m_hpm.set_hp(thread_index, 2, nullptr);
@@ -172,8 +178,11 @@ namespace hp
             while(true)
             {
                 auto res = search(thread_index, val, start_node);
-                if( res.curr && m_cmp.equal(res.curr->value, val) )
-                {
+                if(
+                    res.curr &&
+                    !res.curr->is_sentinel &&
+                    m_cmp.equal(res.curr->value, val)
+                ) {
                     m_hpm.physically_remove_node(new_node);
                     return nullptr;
                 }
@@ -204,8 +213,11 @@ namespace hp
             {
                 auto res = search(thread_index, val, start_node);
 
-                if(!res.curr || !m_cmp.equal(res.curr->value, val))
-                {
+                if(
+                    !res.curr ||
+                    res.curr->is_sentinel ||
+                    !m_cmp.equal(res.curr->value, val)
+                ) {
                     return false;
                 }
                 auto next = res.curr->next.load(std::memory_order_consume);
@@ -261,7 +273,8 @@ namespace hp
             if(curr != prev->next.load(std::memory_order_acquire)) goto AGAIN;
             while(true)
             {
-                if(!curr || curr->is_sentinel) return find_result{prev, nullptr};
+                if(!curr) return find_result{prev, nullptr};
+                else if(curr->is_sentinel) return find_result{prev, curr};
                 next = curr->next.load(std::memory_order_consume);
                 while(is_marked(next))
                 {
@@ -282,7 +295,7 @@ namespace hp
                         goto AGAIN;
                     next = curr->next.load(std::memory_order_relaxed);
                 }
-                if(curr->is_sentinel) return find_result{prev, nullptr};
+                if(curr->is_sentinel) return find_result{prev, curr};
                 if(m_cmp.more_equal(curr->value, val))
                 {
                     return find_result{prev, curr};
@@ -331,9 +344,9 @@ namespace hp
             {
                 dat[thread_index].cnt.fetch_sub(1, std::memory_order_acquire);
             }
-            uint64_t get_sum() const
+            int64_t get_sum() const
             {
-                uint64_t sum = 0;
+                int64_t sum = 0;
                 for(uint64_t i = 0; i < MAX_THREADS_NUMBER; ++i)
                 {
                     sum += dat[i].cnt.load(std::memory_order_consume);
@@ -345,7 +358,7 @@ namespace hp
             {
                 entry_type(): cnt(0) {}
 
-                std::atomic<uint64_t> cnt;
+                std::atomic<int64_t> cnt;
                 char padding[128 - sizeof cnt];
             };
             std::array<entry_type, MAX_THREADS_NUMBER> dat;
@@ -425,7 +438,7 @@ namespace hp
         {
             if(
                 m_load_factor_controller.get_sum() + 1 >
-                static_cast<uint64_t>(m_load_factor) * SIZE
+                static_cast<int64_t>(m_load_factor * SIZE)
             ) {
                 throw std::runtime_error("insufficient resources");
             }

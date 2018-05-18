@@ -96,7 +96,7 @@ int main(int /*argc*/, char** /*argv*/)
         8, 1024 * 1024, size_t
     > structure(2);
 
-    constexpr size_t WAIT_NUM = 1;
+    constexpr size_t WAIT_NUM = 10;
     constexpr size_t prod_thread_num = 4;
     constexpr size_t cons_thread_num = 4;
     constexpr size_t thread_num = prod_thread_num + prod_thread_num;

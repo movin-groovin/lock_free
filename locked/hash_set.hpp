@@ -4,7 +4,7 @@
 #include <mutex>
 #include <vector>
 #include <array>
-#include <unordered_map>
+#include <unordered_set>
 #include <algorithm>
 
 #include <boost/noncopyable.hpp>
@@ -16,7 +16,15 @@
 namespace locked
 {
     //
-    //;
+    template <typename T>
+    class striped_hash
+    {
+    public:
+        ;
+
+    private:
+        ;
+    };
     //
 }
 
