@@ -328,16 +328,7 @@ namespace lock_free
             m_tail.store(ptr, std::memory_order_relaxed);
             assert(ptr->next == nullptr);
         }
-        /*
-        node_type* extract_head()
-        {
-            auto head = m_head.load(std::memory_order_consume);
-            assert(head != nullptr);
-            m_head.store(nullptr, std::memory_order_release);
-            m_tail.store(nullptr, std::memory_order_release);
-            return static_cast<node_type*>(head);
-        }
-        */
+
         node_type* get_node(void* ptr, const value_type& val)
         {
             auto node_ptr = get_node(val);
@@ -369,20 +360,17 @@ namespace lock_free
                 {
                     if(!hnext)
                     {
-assert( ((uint64_t)m_tail.load() & 0x4) == 0 );
                         return nullptr;
                     }
                     if(!m_tail.compare_exchange_strong(
                         tail, hnext, std::memory_order_release
                     )) m_backoff.wait();
-assert( ((uint64_t)m_tail.load() & 0x4) == 0 );
                 }
                 else {
                     if(m_head.compare_exchange_strong(
                         head, hnext, std::memory_order_acq_rel
                     )) {
                         head = tptrs::increment(head);
-assert( ((uint64_t)m_tail.load() & 0x4) == 0 );
                         return static_cast<node_type*>(head);
                     }
                     m_backoff.wait();
@@ -417,7 +405,6 @@ assert( ((uint64_t)m_tail.load() & 0x4) == 0 );
                         m_tail.compare_exchange_strong(
                             tail, ptr, std::memory_order_release
                         );
-assert( ((uint64_t)m_tail.load() & 0x4) == 0 );
                         break;
                     }
                     m_backoff.wait();
@@ -426,11 +413,9 @@ assert( ((uint64_t)m_tail.load() & 0x4) == 0 );
                     if(!m_tail.compare_exchange_strong(
                         tail, next, std::memory_order_release
                     )) m_backoff.wait();
-assert( ((uint64_t)m_tail.load() & 0x4) == 0 );
                 }
                 //
             }
-assert( ((uint64_t)m_tail.load() & 0x4) == 0 );
 
             return true;
         }
@@ -633,9 +618,13 @@ assert( ((uint64_t)m_tail.load() & 0x4) == 0 );
         allocator_holder_type m_allocator_holder;
         std::array<thread_data_entry_type, MAX_THREADS_NUMBER> m_threads_data;
     };
+	//
+}
 
-
-    template <typename BackOff = empty_backoff>
+namespace locked
+{
+    //
+    template <typename BackOff = lock_free::empty_backoff>
     class spin_lock
     {
     public:
@@ -666,7 +655,7 @@ assert( ((uint64_t)m_tail.load() & 0x4) == 0 );
         mutable std::atomic<bool> m_flag;
         backoff_strategy_type m_backoff;
     };
-	//
+    //
 }
 
 #endif // __TECHNICAL_LOCK_FREE_HPP__
