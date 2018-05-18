@@ -633,9 +633,13 @@ assert( ((uint64_t)m_tail.load() & 0x4) == 0 );
         allocator_holder_type m_allocator_holder;
         std::array<thread_data_entry_type, MAX_THREADS_NUMBER> m_threads_data;
     };
+	//
+}
 
-
-    template <typename BackOff = empty_backoff>
+namespace locked
+{
+    //
+    template <typename BackOff = lock_free::empty_backoff>
     class spin_lock
     {
     public:
@@ -666,7 +670,7 @@ assert( ((uint64_t)m_tail.load() & 0x4) == 0 );
         mutable std::atomic<bool> m_flag;
         backoff_strategy_type m_backoff;
     };
-	//
+    //
 }
 
 #endif // __TECHNICAL_LOCK_FREE_HPP__
