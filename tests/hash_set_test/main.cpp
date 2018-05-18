@@ -95,6 +95,7 @@ int main(int /*argc*/, char** /*argv*/)
     lock_free::hp::static_closed_hash_set<
         8, 1024 * 1024, size_t
     > structure(2);
+//    locked::striped_unordered_set<size_t, 1024 * 4> structure;
 
     constexpr size_t WAIT_NUM = 10;
     constexpr size_t prod_thread_num = 4;

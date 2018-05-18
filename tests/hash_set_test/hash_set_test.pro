@@ -13,7 +13,7 @@ INCLUDEPATH += ./../../
 DESTDIR = build
 OBJECTS_DIR = build
 
-#DEFINES += NDEBUG
+DEFINES += NDEBUG
 
 HEADERS += ./../../technical.hpp \
     ./../../hp/hash_set.hpp \

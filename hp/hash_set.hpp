@@ -436,16 +436,16 @@ namespace hp
 
         bool add(const value_type& value)
         {
-            if(
-                m_load_factor_controller.get_sum() + 1 >
-                static_cast<int64_t>(m_load_factor * SIZE)
-            ) {
-                throw std::runtime_error("insufficient resources");
-            }
+//            if(
+//                m_load_factor_controller.get_sum() + 1 >
+//                static_cast<int64_t>(m_load_factor * SIZE)
+//            ) {
+//                throw std::runtime_error("insufficient resources");
+//            }
             uint64_t thread_index = get_thread_index();
             auto bucket = m_hash(value) % SIZE;
             auto ret = m_data.add(thread_index, value, false, (*m_ptrs)[bucket]);
-            m_load_factor_controller.increment(thread_index);
+//            m_load_factor_controller.increment(thread_index);
             return ret;
         }
 
@@ -454,7 +454,7 @@ namespace hp
             uint64_t thread_index = get_thread_index();
             auto bucket = m_hash(value) % SIZE;
             auto ret = m_data.remove(thread_index, value, (*m_ptrs)[bucket]);
-            m_load_factor_controller.decrement(thread_index);
+//            m_load_factor_controller.decrement(thread_index);
             return ret;
         }
 
