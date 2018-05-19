@@ -7,7 +7,8 @@ CONFIG -= qt
 
 #QMAKE_CFLAGS += -static
 #QMAKE_CXXFLAGS += -static-libstdc++
-QMAKE_CXXFLAGS += -std=c++14 -Wall -Wextra -pedantic -O3 -pthread
+QMAKE_CXXFLAGS += -std=c++14 -Wall -Wextra -pedantic \
+     -O3 -pthread
 QMAKE_LFLAGS += -lpthread
 INCLUDEPATH += ./../../
 DESTDIR = build

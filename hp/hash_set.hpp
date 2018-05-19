@@ -118,11 +118,6 @@ namespace hp
             m_head.store(m_hpm.get_node(0), std::memory_order_relaxed);
         }
 
-//        node_type* get_head()
-//        {
-//            return m_head.load(std::memory_order_acquire);
-//        }
-
         node_type* add_sentinel(
             const value_type& val, node_type* start_node = nullptr
         ) {
@@ -263,6 +258,7 @@ namespace hp
         ) {
             node_type* prev{}, *curr{}, *next{};
 
+            PREFETCH(start_node);
             AGAIN:
             prev = start_node;
             assert( prev->is_sentinel );
@@ -273,8 +269,12 @@ namespace hp
             if(curr != prev->next.load(std::memory_order_acquire)) goto AGAIN;
             while(true)
             {
-                if(!curr) return find_result{prev, nullptr};
-                else if(curr->is_sentinel) return find_result{prev, curr};
+                if(!curr) {
+                    return find_result{prev, nullptr};
+                } else if(curr->is_sentinel) {
+                    PREFETCH(curr);
+                    return find_result{prev, curr};
+                }
                 next = curr->next.load(std::memory_order_consume);
                 while(is_marked(next))
                 {
@@ -295,13 +295,15 @@ namespace hp
                         goto AGAIN;
                     next = curr->next.load(std::memory_order_relaxed);
                 }
-                if(curr->is_sentinel) return find_result{prev, curr};
-                if(m_cmp.more_equal(curr->value, val))
+                //if(curr->is_sentinel) return find_result{prev, curr};
+                PREFETCH(curr);
+                if(curr->is_sentinel || m_cmp.more_equal(curr->value, val))
                 {
                     return find_result{prev, curr};
                 }
 
                 prev = curr;
+                PREFETCH(prev);
                 m_hpm.set_hp(thread_index, 0, prev);
                 curr = next;
                 m_hpm.set_hp(thread_index, 1, curr);
@@ -444,7 +446,8 @@ namespace hp
 //            }
             uint64_t thread_index = get_thread_index();
             auto bucket = m_hash(value) % SIZE;
-            auto ret = m_data.add(thread_index, value, false, (*m_ptrs)[bucket]);
+            auto ret =
+                m_data.add(thread_index, value, false, (*m_ptrs)[bucket]);
 //            m_load_factor_controller.increment(thread_index);
             return ret;
         }

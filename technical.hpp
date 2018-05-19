@@ -20,6 +20,16 @@
 #include <boost/noncopyable.hpp>
 
 
+#ifdef __GNUG__
+    #define PREFETCH(ptr, ...) __builtin_prefetch(ptr, ## __VA_ARGS__)
+    #define LIKELY(x)	__builtin_expect(!!(x), 1)
+    #define UNLIKELY(x)	__builtin_expect(!!(x), 0)
+#else
+    #define PREFETCH(...) static_cast<void>(0)
+    #define LIKELY(x) static_cast<void>(0)
+    #define UNLIKELY(x)	static_cast<void>(0)
+#endif // __GNUG__
+
 
 namespace lock_free
 {
