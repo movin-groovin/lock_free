@@ -64,7 +64,7 @@ namespace tools
     {
         stat_data stat;
         std::future<void> fut;
-        char padding[128 - (sizeof stat + sizeof fut)];
+        char padding[128];
     };
 
     template <typename T>
@@ -93,7 +93,7 @@ int main(int /*argc*/, char** /*argv*/)
     using namespace tools;
 
     lock_free::hp::static_closed_hash_set<
-        8, 1 * 1024 * 1024, size_t
+        8, 2 * 1024 * 1024, size_t
     > structure(2);
 //    locked::striped_unordered_set<size_t, 1024 * 4> structure;
 
@@ -115,8 +115,9 @@ int main(int /*argc*/, char** /*argv*/)
             random_uniformly_gen<size_t> rgen(1, 2 * 1024 * 1024);
 
             ++started_num;
-            while(!start);
-            while (!stop)
+            while(!start.load(std::memory_order_acquire))
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            while (true)
             {
                 auto val = rgen();
                 auto ts1 = std::chrono::high_resolution_clock::now();
@@ -136,6 +137,12 @@ int main(int /*argc*/, char** /*argv*/)
                     stat.min_prod_nsec = nsec_latency;
                 stat.nsec_total += nsec_latency;
                 ++stat.call_count;
+
+                if(!(stat.call_count % 10))
+                {
+                    std::atomic_thread_fence(std::memory_order_release);
+                    if(stop.load(std::memory_order_relaxed)) break;
+                }
             }
         };
     auto cons_func =
@@ -146,8 +153,9 @@ int main(int /*argc*/, char** /*argv*/)
             need_init<decltype(structure)>::thread_init(structure);
 
             ++started_num;
-            while(!start);
-            while (!stop)
+            while(!start.load(std::memory_order_acquire))
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            while (true)
             {
                 auto ts1 = std::chrono::high_resolution_clock::now();
                 auto res = structure.remove(rgen());
@@ -165,6 +173,13 @@ int main(int /*argc*/, char** /*argv*/)
                 if (nsec_latency < stat.min_cons_nsec)
                     stat.min_cons_nsec = nsec_latency;
                 stat.nsec_total += nsec_latency;
+                ++stat.call_count;
+
+                if(!(stat.call_count % 10))
+                {
+                    std::atomic_thread_fence(std::memory_order_release);
+                    if(stop.load(std::memory_order_relaxed)) break;
+                }
             }
         };
 
