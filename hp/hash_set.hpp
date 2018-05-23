@@ -49,10 +49,16 @@ namespace hp
 
         hash_node(): next(nullptr) {}
         hash_node(value_type const& ref): next(nullptr), value(ref) {}
+        void set_nodes_holder(bool val) {nodes_holder = val;}
+        bool get_nodes_holder() const {return nodes_holder;}
+        void set_counter(uint16_t val) {counter = val;}
+        uint16_t get_counter() const {return counter;}
 
         std::atomic<hash_node*> next;
         value_type value;
         bool is_sentinel = false;
+        bool nodes_holder = false;
+        uint16_t counter = -1;
     };
 
     template<
@@ -105,6 +111,7 @@ namespace hp
         {
             m_hpm.thread_init(thread_index);
         }
+
         void init(
             uint64_t threads_number,
             uint64_t init_nodes_number = 0,
@@ -118,11 +125,6 @@ namespace hp
             m_head.store(m_hpm.get_node(0), std::memory_order_relaxed);
         }
 
-//        node_type* get_head()
-//        {
-//            return m_head.load(std::memory_order_acquire);
-//        }
-
         node_type* add_sentinel(
             const value_type& val, node_type* start_node = nullptr
         ) {
@@ -131,7 +133,9 @@ namespace hp
             {
                 start_node = ptr;
             }
-            node_type* new_node = m_hpm.get_node(uint64_t(), val);
+            //m_hpm.get_node(uint64_t(), val);
+            node_type* new_node = m_hpm.physically_create_node();
+            new_node->value = val;
             new_node->is_sentinel = true;
             start_node->next.store(new_node, std::memory_order_relaxed);
             return new_node;
@@ -409,6 +413,7 @@ namespace hp
                 m_thread_index_calculator.fetch_add(1, std::memory_order_acquire);
             return thread_index;
         }
+
         void thread_init()
         {
             if(m_thread_index_calculator.load(std::memory_order_acquire) >=
@@ -416,8 +421,9 @@ namespace hp
             ) throw std::runtime_error("Too many threads");
             m_data.thread_init( get_thread_index() );
         }
+
         void init(
-            uint64_t init_nodes_number = 0,
+            uint64_t init_nodes_number = 256 * 1024,
             uint64_t max_nodes_number = 0
         ) {
             m_data.init(

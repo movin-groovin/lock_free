@@ -499,6 +499,14 @@ namespace lock_free
             std::array<std::atomic<node_type*>, HP_NUM> thread_hps = {};
             uint64_t free_ptrs_index = 0;
             std::array<node_type*, FREE_PTR_NUM> free_ptrs = {};
+            uint64_t current_nodes_holder = -1;
+        };
+        struct nodes_holder_type
+        {
+            nodes_holder_type(): count(0) {}
+
+            std::atomic<uint64_t> count;
+            queue_nodes_holder<node_type, backoff_strategy_type> holder;
         };
 
     public:
@@ -514,15 +522,46 @@ namespace lock_free
                     physically_remove_node(free_ptrs[j]);
                 }
             }
+            for(uint64_t i = 0; i < m_threads_number / 2; ++i)
+            {
+                auto& nodes_holder = m_nodes_holder[i];
+                while(auto ptr = nodes_holder.holder.get_node())
+                {
+                    physically_remove_node(
+                        tptrs::get_pointer<node_type*>(ptr)
+                    );
+                }
+                //
+            }
+            return;
         }
 
-        void thread_init(uint64_t /*thread_index*/) {}
+        void thread_init(uint64_t thread_index)
+        {
+            uint64_t pos = thread_index / 2;
+            m_threads_data[pos].current_nodes_holder = pos;
+        }
+
         void init(
             uint64_t threads_number,
-            uint64_t /*init_nodes_number*/,
+            uint64_t init_nodes_number,
             uint64_t /*max_nodes_number*/
         ) {
             m_threads_number = threads_number;
+            for(uint64_t i = 0; i < threads_number / 2; ++i)
+            {
+                auto& entry = m_nodes_holder[i];
+                entry.count = init_nodes_number;
+                node_type* ptr = physically_create_node();
+                ptr->set_nodes_holder(true);
+                entry.holder.init(ptr);
+                for(uint64_t j = 0; j < init_nodes_number; ++j)
+                {
+                    ptr = physically_create_node();
+                    ptr->set_nodes_holder(true);
+                    entry.holder.save_node(ptr);
+                }
+            }
         }
 
         void set_hp(uint64_t thread_index, uint64_t pos, node_type* ptr)
@@ -532,6 +571,7 @@ namespace lock_free
                 ptr, std::memory_order_release
             );
         }
+
         node_type* get_hp(uint64_t thread_index, uint64_t pos)
         {
             auto& thread_data_entry = m_threads_data[thread_index];
@@ -543,30 +583,69 @@ namespace lock_free
         void remove_node(uint64_t thread_index, node_type* ptr)
         {
             auto& thread_data_entry = m_threads_data[thread_index];
-            thread_data_entry.free_ptrs[thread_data_entry.free_ptrs_index++] = ptr;
+            thread_data_entry.free_ptrs[
+                thread_data_entry.free_ptrs_index++
+            ] = ptr;
             if(thread_data_entry.free_ptrs_index == FREE_PTR_NUM)
             {
                 erase(thread_index);
             }
         }
+
         // if ptr wasn't in the chain (it is yet unused)
         void physically_remove_node(node_type* ptr)
         {
             m_allocator_holder.destroy_and_deallocate(ptr);
         }
 
-        node_type* get_node(uint64_t /*thread_index*/)
+        node_type* physically_create_node()
         {
             return m_allocator_holder.allocate_and_construct();
         }
-        node_type* get_node(uint64_t /*thread_index*/, const value_type& val)
+
+        node_type* get_node(uint64_t thread_index)
         {
-            auto ptr = get_node(uint64_t());
+            auto& thread_data_entry = m_threads_data[thread_index];
+            auto pos = thread_data_entry.current_nodes_holder %
+                                            (m_threads_number / 2);
+            auto& nodes_holder = m_nodes_holder[pos];
+            if(auto ptr = nodes_holder.holder.get_node())
+            {
+                auto cleared_ptr = tptrs::get_pointer<node_type*>(ptr);
+                //if(cleared_ptr->get_nodes_holder())
+                cleared_ptr->set_counter(tptrs::get_counter(ptr));
+                cleared_ptr->next.store(nullptr, std::memory_order_release);
+                if(!(thread_data_entry.current_nodes_holder % 50))
+                    ++thread_data_entry.current_nodes_holder;
+                return cleared_ptr;
+            }
+            return physically_create_node();
+        }
+
+        node_type* get_node(uint64_t thread_index, const value_type& val)
+        {
+            auto ptr = get_node(thread_index);
             ptr->value = val;
             return ptr;
         }
 
     private:
+        bool logically_remove_node(
+            nodes_holder_type& nodes_holder, node_type* ptr
+        ) {
+            if(ptr->get_nodes_holder())
+            {
+                auto tagged_ptr = static_cast<node_type*>(
+                    tptrs::set( ptr, ptr->get_counter() )
+                );
+                nodes_holder.holder.save_node(tagged_ptr);
+                return true;
+            }
+
+            physically_remove_node(ptr);
+            return false;
+        }
+
         void erase(uint64_t thread_index)
         {
             std::array<node_type*, HP_NUM * MAX_THREADS_NUMBER> hps;
@@ -595,6 +674,9 @@ namespace lock_free
 
             // в free_ptrs самые свежие указатели в конце массива - optimize
             // свежие - т.е. могут быть в hazard pointers
+            auto pos = thread_data.current_nodes_holder % (m_threads_number / 2);
+            auto& nodes_holder = m_nodes_holder[pos];
+            bool used_nodes_holder = false;
             for(auto ptr : thread_data.free_ptrs)
             {
                 assert(ptr != nullptr);
@@ -603,8 +685,10 @@ namespace lock_free
                     busy_ptrs[busy_ptrs_cnt++] = ptr;
                     continue;
                 }
-                m_allocator_holder.destroy_and_deallocate(ptr);
+                used_nodes_holder = logically_remove_node(nodes_holder, ptr);
             }
+            if(used_nodes_holder)
+                thread_data.current_nodes_holder = ++pos % m_threads_number;
             std::copy(
                 busy_ptrs.data(),
                 busy_ptrs.data() + busy_ptrs_cnt,
@@ -617,6 +701,7 @@ namespace lock_free
         uint64_t m_threads_number = 0;
         allocator_holder_type m_allocator_holder;
         std::array<thread_data_entry_type, MAX_THREADS_NUMBER> m_threads_data;
+        std::array<nodes_holder_type, MAX_THREADS_NUMBER> m_nodes_holder;
     };
 	//
 }
