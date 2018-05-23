@@ -423,7 +423,7 @@ namespace hp
         }
 
         void init(
-            uint64_t init_nodes_number = 256 * 1024,
+            uint64_t init_nodes_number = 1024 * 1024,
             uint64_t max_nodes_number = 0
         ) {
             m_data.init(

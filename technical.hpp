@@ -223,15 +223,15 @@ namespace lock_free
             m_head.store(ptr, std::memory_order_relaxed);
             assert(ptr->next == nullptr);
         }
-        /*
+
         node_type* extract_head()
         {
-            auto head = m_head.load(std::memory_order_consume);
+            auto head = m_head.load(std::memory_order_relaxed);
             assert(head != nullptr);
-            m_head.store(nullptr, std::memory_order_release);
+            m_head.store(nullptr, std::memory_order_relaxed);
             return static_cast<node_type*>(head);
         }
-        */
+
         node_type* get_node(void* ptr, const value_type& val)
         {
             auto node_ptr = get_node(val);
@@ -327,6 +327,15 @@ namespace lock_free
             m_head.store(ptr, std::memory_order_relaxed);
             m_tail.store(ptr, std::memory_order_relaxed);
             assert(ptr->next == nullptr);
+        }
+
+        node_type* extract_head()
+        {
+            auto head = m_head.load(std::memory_order_relaxed);
+            assert(head != nullptr);
+            m_head.store(nullptr, std::memory_order_relaxed);
+            m_tail.store(nullptr, std::memory_order_relaxed);
+            return static_cast<node_type*>(head);
         }
 
         node_type* get_node(void* ptr, const value_type& val)
@@ -531,7 +540,12 @@ namespace lock_free
                         tptrs::get_pointer<node_type*>(ptr)
                     );
                 }
-                //
+                if(auto ptr = nodes_holder.holder.extract_head())
+                {
+                    physically_remove_node(
+                        tptrs::get_pointer<node_type*>(ptr)
+                    );
+                }
             }
             return;
         }
